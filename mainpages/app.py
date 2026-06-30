@@ -3,10 +3,9 @@ from werkzeug.utils import secure_filename
 import os
 import PyPDF2
 import pdfplumber
-from docx import Document  # Import docx library
-import google.generativeai as genai
+from docx import Document
+from groq import Groq
 from flask_cors import CORS
-import zipfile
 
 
 # Configure the app and allowed file types
@@ -17,8 +16,10 @@ app.config['ALLOWED_EXTENSIONS'] = {'txt', 'pdf', 'docx'}
 # Ensure the upload directory exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Configure API key for Google Generative AI (REPLACE WITH YOUR ACTUAL API KEY)
-genai.configure(api_key="AIzaSyCpa3zWlaCsSoUIpy9u4YLZZBwxpJi-Aec") #<-- Replace with your actual key
+
+client = Groq(
+    api_key=os.getenv("GROQ_API_KEY")
+) #<-- Replace with your actual key
 
 # Enable CORS
 CORS(app)
@@ -29,6 +30,17 @@ def allowed_file(filename):
 @app.route('/')
 def home():
     return render_template('index.html') #Corrected template name
+@app.route('/login')
+def login():
+    return render_template('log.html')
+
+@app.route('/signup')
+def signup():
+    return render_template('sign.html')
+
+@app.route('/translator')
+def translator():
+    return render_template('index1.html')
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -106,7 +118,9 @@ def create_docx(text):
 
 @app.route('/translate', methods=['POST'])
 def translate_text():
+
     data = request.json
+
     text = data.get("text", "")
     target_language = data.get("targetLanguage", "English")
     output_structure = data.get("outputStructure", "formal and educational")
@@ -115,19 +129,55 @@ def translate_text():
         return jsonify({"error": "Text is required"}), 400
 
     try:
-        prompt = f"Translate the following text to {target_language} in a {output_structure} tone: '{text}'. " \
-                 "Ensure that if the input is a single word, the output is a single word, and if the input is a sentence, " \
-                 "the output retains the same meaning and structure. Provide only the translated text, nothing else."
 
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        response = model.generate_content(prompt)
-        translation = response.text if response else "Translation failed."
-        return jsonify({"translation": translation})
+        prompt = f"""
+Translate the following text into {target_language}.
 
-    except genai.exception.GenerativeAIError as e:
-        return jsonify({"error": f"Gemini API Error: {e}"}), 500
+Tone: {output_structure}
+
+Rules:
+- If input is a single word, output only one translated word.
+- If input is a sentence, preserve its meaning.
+- Return ONLY the translated text.
+
+Text:
+{text}
+"""
+
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+           messages=[
+    {
+        "role": "system",
+        "content": "You are a professional multilingual translator. Translate accurately. Return ONLY the translated text without explanations."
+    },
+    {
+        "role": "user",
+        "content": prompt
+    }
+],
+            temperature=0.3,
+            max_completion_tokens=2048,
+            top_p=1
+        )
+
+        translation = response.choices[0].message.content.strip()
+
+        if not translation:
+            return jsonify({
+                "error": "No translation returned."
+            }), 500
+
+        return jsonify({
+            "translation": translation
+        })
+
     except Exception as e:
-        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+        print(e)
+
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 
 if __name__ == "__main__":
